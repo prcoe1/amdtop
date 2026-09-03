@@ -1015,7 +1015,7 @@ static int compare_process_type_desc(const void *pp1, const void *pp2) {
   return (p1->process->type == gpu_process_graphical) != (p2->process->type == gpu_process_graphical);
 }
 
-static int compare_process_type_asc(const void *pp1, const void *pp2) { return -compare_process_name_desc(pp1, pp2); }
+static int compare_process_type_asc(const void *pp1, const void *pp2) { return -compare_process_type_desc(pp1, pp2); }
 
 static int compare_process_gpu_rate_desc(const void *pp1, const void *pp2) {
   const struct gpuid_and_process *p1 = (const struct gpuid_and_process *)pp1;

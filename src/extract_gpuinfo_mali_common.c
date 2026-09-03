@@ -197,11 +197,7 @@ static void authenticate_drm(int fd, struct drmFuncTable *funcs) {
 
   if (funcs->drmAuthMagic(fd, magic) == 0) {
     if (funcs->drmDropMaster(fd)) {
-      perror("Failed to drop DRM master");
-      fprintf(
-          stderr,
-          "\nWARNING: other DRM clients will crash on VT switch while nvtop is running!\npress ENTER to continue\n");
-      fgetc(stdin);
+      fprintf(stderr, "WARNING: Failed to drop DRM master; other DRM clients may crash on VT switch while amdtop is running\n");
     }
     return;
   }

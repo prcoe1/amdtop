@@ -69,19 +69,20 @@ bool nvtop_rocm_smi_find_device(const char *pdev, uint32_t *out_index) {
   return false;
 }
 
+#define RSMI_CU_OCCUPANCY_INVALID 0xFFFFFFFFu
+
 bool nvtop_rocm_smi_device_name(uint32_t index, char *name, size_t name_len) {
   if (!rsmi_ready || !name || name_len == 0)
     return false;
 
-  // 使用更大的临时缓冲区防止溢出
+  // Use larger temp buffer to avoid overflow from rocm_smi
   char temp_name[256];
   memset(temp_name, 0, sizeof(temp_name));
 
   rsmi_status_t status = rsmi_dev_name_get(index, temp_name, sizeof(temp_name) - 1);
 
   if (status == RSMI_STATUS_SUCCESS && temp_name[0] != '\0') {
-    strncpy(name, temp_name, name_len - 1);
-    name[name_len - 1] = '\0';
+    snprintf(name, name_len, "%s", temp_name);
     return true;
   }
 
@@ -90,8 +91,8 @@ bool nvtop_rocm_smi_device_name(uint32_t index, char *name, size_t name_len) {
 }
 
 static bool rsmi_get_clock_mhz(uint32_t index, rsmi_clk_type_t type, unsigned int *current, unsigned int *max) {
-  // 暂时禁用时钟频率读取，因为 rsmi_dev_gpu_clk_freq_get 可能导致栈溢出
-  // 这可能是由于 ROCm SMI 库版本与头文件不匹配导致的
+  // Clock reading disabled: rsmi_dev_gpu_clk_freq_get has caused stack overflows
+  // with mismatched ROCm SMI header/library versions. Keep disabled until ABI is stable.
   (void)index;
   (void)type;
   (void)current;
@@ -233,29 +234,28 @@ bool nvtop_rocm_smi_get_processes(struct gpu_info *gpu_info) {
   if (!rsmi_ready || !gpu_info)
     return false;
 
-  // 第一次调用：获取进程数量
+  // First call: get process count
   uint32_t num_items = 0;
   rsmi_status_t status = rsmi_compute_process_info_get(NULL, &num_items);
 
   if (status != RSMI_STATUS_SUCCESS || num_items == 0) {
-    // 没有进程或调用失败
     gpu_info->processes_count = 0;
     return true;
   }
 
-  // 分配临时内存存储 ROCm SMI 进程信息
+  // Allocate temp storage for ROCm SMI process info
   rsmi_process_info_t *procs = calloc(num_items, sizeof(rsmi_process_info_t));
   if (!procs)
     return false;
 
-  // 第二次调用：获取实际进程数据
+  // Second call: get actual process data
   status = rsmi_compute_process_info_get(procs, &num_items);
   if (status != RSMI_STATUS_SUCCESS) {
     free(procs);
     return false;
   }
 
-  // 确保 processes 数组有足够空间
+  // Ensure processes array has enough space
   if (num_items > gpu_info->processes_array_size) {
     struct gpu_process *new_processes = realloc(gpu_info->processes, num_items * sizeof(struct gpu_process));
     if (!new_processes) {
@@ -266,24 +266,24 @@ bool nvtop_rocm_smi_get_processes(struct gpu_info *gpu_info) {
     gpu_info->processes_array_size = num_items;
   }
 
-  // 清空现有进程信息
+  // Clear existing process info
   memset(gpu_info->processes, 0, num_items * sizeof(struct gpu_process));
 
-  // 转换 ROCm SMI 进程信息到 AMDTOP 格式
+  // Convert ROCm SMI process info to amdtop format
   gpu_info->processes_count = num_items;
   for (uint32_t i = 0; i < num_items; ++i) {
     struct gpu_process *proc = &gpu_info->processes[i];
 
     proc->pid = procs[i].process_id;
-    proc->type = gpu_process_compute; // ROCm SMI 只报告计算进程
+    proc->type = gpu_process_compute; // ROCm SMI only reports compute processes
 
-    // 设置显存使用量（ROCm SMI 返回字节）
+    // VRAM usage (bytes)
     if (procs[i].vram_usage > 0) {
       SET_GPUINFO_PROCESS(proc, gpu_memory_usage, procs[i].vram_usage);
     }
 
-    // 设置 GPU 使用率（从 CU 占用率转换）
-    if (procs[i].cu_occupancy != 0xFFFFFFFF) { // CU_OCCUPANCY_INVALID
+    // GPU usage from CU occupancy
+    if (procs[i].cu_occupancy != RSMI_CU_OCCUPANCY_INVALID) {
       SET_GPUINFO_PROCESS(proc, gpu_usage, procs[i].cu_occupancy);
     }
   }

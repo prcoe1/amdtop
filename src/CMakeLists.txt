@@ -94,11 +94,11 @@ if (AMDGPU_SUPPORT)
   if (ROCM_SMI_SUPPORT)
     find_path(ROCM_SMI_INCLUDE_DIR
       NAMES rocm_smi/rocm_smi.h
-      PATHS /opt/rocm /opt/rocm-7.1.0
-      PATH_SUFFIXES include)
+      PATHS /opt/rocm
+      PATH_SUFFIXES include rocm_smi/include)
     find_library(ROCM_SMI_LIBRARY
       NAMES rocm_smi64 librocm_smi64
-      PATHS /opt/rocm/lib /opt/rocm/lib64 /opt/rocm-7.1.0/lib /opt/rocm-7.1.0/lib64)
+      PATHS /opt/rocm/lib /opt/rocm/lib64)
 
     if (ROCM_SMI_INCLUDE_DIR AND ROCM_SMI_LIBRARY)
       target_sources(amdtop PRIVATE rocm_smi_utils.c)

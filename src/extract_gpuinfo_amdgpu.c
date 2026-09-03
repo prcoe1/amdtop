@@ -324,11 +324,7 @@ static void authenticate_drm(int fd) {
 
   if (_drmAuthMagic(fd, magic) == 0) {
     if (_drmDropMaster(fd)) {
-      perror("Failed to drop DRM master");
-      fprintf(
-          stderr,
-          "\nWARNING: other DRM clients will crash on VT switch while nvtop is running!\npress ENTER to continue\n");
-      fgetc(stdin);
+      fprintf(stderr, "WARNING: Failed to drop DRM master; other DRM clients may crash on VT switch while amdtop is running\n");
     }
     return;
   }
@@ -353,6 +349,9 @@ static void initDeviceSysfsPaths(struct gpu_info_amdgpu *gpu_info) {
     const char *hwmonPath;
     nvtop_device_get_syspath(gpu_info->hwmonDevice, &hwmonPath);
     int hwmonFD = open(hwmonPath, O_RDONLY);
+    if (hwmonFD < 0) {
+      return;
+    }
 
     // Look for which fan to use (PWM or RPM)
     gpu_info->fanSpeedFILE = NULL;
@@ -402,11 +401,16 @@ static void initDeviceSysfsPaths(struct gpu_info_amdgpu *gpu_info) {
   }
 
   int sysfsFD = open(devicePath, O_RDONLY);
+  if (sysfsFD < 0) {
+    return;
+  }
   // Open the PCIe bandwidth file for dynamic info gathering
   gpu_info->PCIeBW = NULL;
   int pcieBWFD = openat(sysfsFD, "pcie_bw", O_RDONLY);
-  if (pcieBWFD) {
+  if (pcieBWFD >= 0) {
     gpu_info->PCIeBW = fdopen(pcieBWFD, "r");
+    if (!gpu_info->PCIeBW)
+      close(pcieBWFD);
   }
 
   close(sysfsFD);
@@ -571,64 +575,75 @@ static unsigned pcie_speed_from_gt(double gt) {
   return 0;
 }
 
-static bool parse_lspci_link_line(const char *line, unsigned *gen, unsigned *width) {
-  const char *speed_pos = strstr(line, "Speed ");
-  const char *width_pos = strstr(line, "Width x");
-  if (!speed_pos || !width_pos)
-    return false;
-
-  speed_pos += strlen("Speed ");
-  char *endptr = NULL;
-  double gt = strtod(speed_pos, &endptr);
-  if (endptr == speed_pos)
-    return false;
-
-  width_pos += strlen("Width x");
-  unsigned w = strtoul(width_pos, &endptr, 10);
-  if (endptr == width_pos || w == 0)
-    return false;
-
-  unsigned speed = pcie_speed_from_gt(gt);
-  unsigned g = nvtop_pcie_gen_from_link_speed(speed);
-  if (g == 0)
-    return false;
-
-  *gen = g;
-  *width = w;
-  return true;
-}
-
-static bool query_lspci_link(const char *pdev, unsigned *gen, unsigned *width) {
-  char cmd[128];
-  snprintf(cmd, sizeof(cmd), "lspci -vv -s %s 2>/dev/null", pdev);
-  FILE *fp = popen(cmd, "r");
+static bool read_sysfs_gt(const char *path, double *out_gt) {
+  FILE *fp = fopen(path, "r");
   if (!fp)
     return false;
-
-  char line[512];
-  bool found_cap = false;
-  unsigned cap_gen = 0, cap_width = 0;
-  while (fgets(line, sizeof(line), fp)) {
-    if (strstr(line, "LnkSta:")) {
-      if (parse_lspci_link_line(line, gen, width)) {
-        pclose(fp);
-        return true;
-      }
-    }
-    if (!found_cap && strstr(line, "LnkCap:")) {
-      if (parse_lspci_link_line(line, &cap_gen, &cap_width)) {
-        found_cap = true;
-      }
+  char buf[64];
+  bool ok = false;
+  if (fgets(buf, sizeof(buf), fp)) {
+    char *endptr = NULL;
+    double gt = strtod(buf, &endptr);
+    if (endptr != buf && gt > 0) {
+      *out_gt = gt;
+      ok = true;
     }
   }
+  fclose(fp);
+  return ok;
+}
 
-  pclose(fp);
-  if (found_cap) {
-    *gen = cap_gen;
-    *width = cap_width;
+static bool read_sysfs_uint(const char *path, unsigned *out) {
+  FILE *fp = fopen(path, "r");
+  if (!fp)
+    return false;
+  unsigned v = 0;
+  int ret = fscanf(fp, "%u", &v);
+  fclose(fp);
+  if (ret == 1 && v > 0) {
+    *out = v;
     return true;
   }
   return false;
+}
+
+static bool query_sysfs_pcie_link(const char *pdev, unsigned *gen, unsigned *width) {
+  char speed_path[128];
+  char width_path[128];
+  double gt = 0;
+  unsigned w = 0;
+
+  // Try current_link_* first (LnkSta equivalent)
+  snprintf(speed_path, sizeof(speed_path), "/sys/bus/pci/devices/%s/current_link_speed", pdev);
+  snprintf(width_path, sizeof(width_path), "/sys/bus/pci/devices/%s/current_link_width", pdev);
+  if (read_sysfs_gt(speed_path, &gt) && read_sysfs_uint(width_path, &w)) {
+    unsigned speed = pcie_speed_from_gt(gt);
+    unsigned g = nvtop_pcie_gen_from_link_speed(speed);
+    if (g != 0) {
+      *gen = g;
+      *width = w;
+      return true;
+    }
+  }
+
+  // Fallback to max_link_* (LnkCap equivalent)
+  snprintf(speed_path, sizeof(speed_path), "/sys/bus/pci/devices/%s/max_link_speed", pdev);
+  snprintf(width_path, sizeof(width_path), "/sys/bus/pci/devices/%s/max_link_width", pdev);
+  if (read_sysfs_gt(speed_path, &gt) && read_sysfs_uint(width_path, &w)) {
+    unsigned speed = pcie_speed_from_gt(gt);
+    unsigned g = nvtop_pcie_gen_from_link_speed(speed);
+    if (g != 0) {
+      *gen = g;
+      *width = w;
+      return true;
+    }
+  }
+  return false;
+}
+
+// Wrapper kept for compatibility - now uses sysfs without shell
+static bool query_lspci_link(const char *pdev, unsigned *gen, unsigned *width) {
+  return query_sysfs_pcie_link(pdev, gen, width);
 }
 
 static bool update_lspci_cache(struct gpu_info_amdgpu *gpu_info) {
@@ -686,10 +701,10 @@ static void gpuinfo_amdgpu_populate_static_info(struct gpu_info *_gpu_info) {
 
   static_info->device_name[MAX_DEVICE_NAME - 1] = '\0';
   if (name && strlen(name)) {
-    strncpy(static_info->device_name, name, MAX_DEVICE_NAME - 1);
+    snprintf(static_info->device_name, MAX_DEVICE_NAME, "%s", name);
     SET_VALID(gpuinfo_device_name_valid, static_info->valid);
   } else if (gpu_info->drmVersion->desc && strlen(gpu_info->drmVersion->desc)) {
-    strncpy(static_info->device_name, gpu_info->drmVersion->desc, MAX_DEVICE_NAME - 1);
+    snprintf(static_info->device_name, MAX_DEVICE_NAME, "%s", gpu_info->drmVersion->desc);
     SET_VALID(gpuinfo_device_name_valid, static_info->valid);
 
     if (info_query_success) {
@@ -697,56 +712,56 @@ static void gpuinfo_amdgpu_populate_static_info(struct gpu_info *_gpu_info) {
       assert(len < MAX_DEVICE_NAME);
 
       char *dst = static_info->device_name + len;
-      size_t remaining_len = MAX_DEVICE_NAME - 1 - len;
+      size_t remaining_len = MAX_DEVICE_NAME - len;
       switch (info.family_id) {
 #ifdef AMDGPU_FAMILY_SI
       case AMDGPU_FAMILY_SI:
-        strncpy(dst, " (Hainan / Oland / Verde / Pitcairn / Tahiti)", remaining_len);
+        snprintf(dst, remaining_len, " (Hainan / Oland / Verde / Pitcairn / Tahiti)");
         break;
 #endif
 #ifdef AMDGPU_FAMILY_CI
       case AMDGPU_FAMILY_CI:
-        strncpy(dst, " (Bonaire / Hawaii)", remaining_len);
+        snprintf(dst, remaining_len, " (Bonaire / Hawaii)");
         break;
 #endif
 #ifdef AMDGPU_FAMILY_KV
       case AMDGPU_FAMILY_KV:
-        strncpy(dst, " (Kaveri / Kabini / Mullins)", remaining_len);
+        snprintf(dst, remaining_len, " (Kaveri / Kabini / Mullins)");
         break;
 #endif
 #ifdef AMDGPU_FAMILY_VI
       case AMDGPU_FAMILY_VI:
-        strncpy(dst, " (Iceland / Tonga)", remaining_len);
+        snprintf(dst, remaining_len, " (Iceland / Tonga)");
         break;
 #endif
 #ifdef AMDGPU_FAMILY_CZ
       case AMDGPU_FAMILY_CZ:
-        strncpy(dst, " (Carrizo / Stoney)", remaining_len);
+        snprintf(dst, remaining_len, " (Carrizo / Stoney)");
         break;
 #endif
 #ifdef AMDGPU_FAMILY_AI
       case AMDGPU_FAMILY_AI:
-        strncpy(dst, " (Vega10)", remaining_len);
+        snprintf(dst, remaining_len, " (Vega10)");
         break;
 #endif
 #ifdef AMDGPU_FAMILY_RV
       case AMDGPU_FAMILY_RV:
-        strncpy(dst, " (Raven)", remaining_len);
+        snprintf(dst, remaining_len, " (Raven)");
         break;
 #endif
 #ifdef AMDGPU_FAMILY_NV
       case AMDGPU_FAMILY_NV:
-        strncpy(dst, " (Navi10)", remaining_len);
+        snprintf(dst, remaining_len, " (Navi10)");
         break;
 #endif
 #ifdef AMDGPU_FAMILY_VGH
       case AMDGPU_FAMILY_VGH:
-        strncpy(dst, " (Van Gogh)", remaining_len);
+        snprintf(dst, remaining_len, " (Van Gogh)");
         break;
 #endif
 #ifdef AMDGPU_FAMILY_YC
       case AMDGPU_FAMILY_YC:
-        strncpy(dst, " (Yellow Carp)", remaining_len);
+        snprintf(dst, remaining_len, " (Yellow Carp)");
         break;
 #endif
       default:
@@ -1180,13 +1195,13 @@ static void swap_process_cache_for_next_update(struct gpu_info_amdgpu *gpu_info)
 static void gpuinfo_amdgpu_get_running_processes(struct gpu_info *_gpu_info) {
   struct gpu_info_amdgpu *gpu_info = container_of(_gpu_info, struct gpu_info_amdgpu, base);
 
-  // 扫描层：使用 fdinfo 获取所有 GPU 进程（包括图形和计算）
+  // Scanner layer: fdinfo provides all GPU processes (graphics + compute)
   swap_process_cache_for_next_update(gpu_info);
 
-  // 增强层：使用 ROCm SMI 增强计算进程的数据
+  // Enhancement layer: augment fdinfo data with ROCm SMI for compute processes
+  // Preserve fdinfo time-based gpu_usage when available; only use ROCm as fallback.
   #ifdef HAVE_ROCM_SMI
   if (gpu_info->rsmi_available && nvtop_rocm_smi_is_available()) {
-    // 获取 ROCm SMI 进程列表
     uint32_t num_items = 0;
     rsmi_status_t status = rsmi_compute_process_info_get(NULL, &num_items);
 
@@ -1196,25 +1211,22 @@ static void gpuinfo_amdgpu_get_running_processes(struct gpu_info *_gpu_info) {
         status = rsmi_compute_process_info_get(procs, &num_items);
 
         if (status == RSMI_STATUS_SUCCESS) {
-          // 遍历 ROCm SMI 进程，增强 fdinfo 数据
           for (uint32_t i = 0; i < num_items; ++i) {
             pid_t rocm_pid = procs[i].process_id;
 
-            // 在 fdinfo 扫描的进程中查找匹配的 PID
+            // Find matching PID in fdinfo-scanned processes
             for (unsigned j = 0; j < gpu_info->base.processes_count; ++j) {
               struct gpu_process *proc = &gpu_info->base.processes[j];
 
               if (proc->pid == rocm_pid) {
-                // 找到匹配的进程，用 ROCm SMI 的高精度数据增强
-                proc->type = gpu_process_compute;
-
-                // 用 ROCm SMI 的显存数据覆盖（更准确）
+                // Augment with ROCm SMI: prefer fdinfo VRAM if already highly accurate,
+                // but ROCm VRAM is authoritative for compute - update if ROCm has data.
                 if (procs[i].vram_usage > 0) {
                   SET_GPUINFO_PROCESS(proc, gpu_memory_usage, procs[i].vram_usage);
                 }
 
-                // 添加 CU 占用率（fdinfo 没有这个数据）
-                if (procs[i].cu_occupancy != 0xFFFFFFFF) {
+                // Only use CU occupancy if fdinfo did not provide gpu_usage
+                if (procs[i].cu_occupancy != 0xFFFFFFFFu && !GPUINFO_PROCESS_FIELD_VALID(proc, gpu_usage)) {
                   SET_GPUINFO_PROCESS(proc, gpu_usage, procs[i].cu_occupancy);
                 }
 

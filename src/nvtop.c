@@ -27,7 +27,9 @@
 #include "nvtop/time.h"
 #include "nvtop/version.h"
 
+#include <dirent.h>
 #include <getopt.h>
+#include <locale.h>
 #include <ncurses.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -35,8 +37,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-
-#include <locale.h>
 
 static volatile sig_atomic_t signal_exit = 0;
 static volatile sig_atomic_t signal_resize_win = 0;
@@ -57,19 +57,39 @@ static void cont_handler(int signum) {
   signal_cont_received = 1;
 }
 
-// Check if AMD/ATI GPU hardware exists using lspci
+// Check if AMD/ATI GPU hardware exists via sysfs (no shell)
 static bool check_amd_gpu_hardware_exists(void) {
-  FILE *fp = popen("lspci 2>/dev/null | grep -iE 'VGA|3D|Display.*AMD|ATI'", "r");
-  if (!fp)
+  // Scan /sys/bus/pci/devices for vendor 0x1002 (AMD/ATI)
+  const char *pci_devices_path = "/sys/bus/pci/devices";
+  DIR *dir = opendir(pci_devices_path);
+  if (!dir)
     return false;
 
-  char line[256];
-  bool found = false;
-  if (fgets(line, sizeof(line), fp) != NULL) {
-    found = true;
+  struct dirent *entry;
+  while ((entry = readdir(dir)) != NULL) {
+    if (entry->d_name[0] == '.')
+      continue;
+    char vendor_path[512];
+    snprintf(vendor_path, sizeof(vendor_path), "%s/%s/vendor", pci_devices_path, entry->d_name);
+    FILE *fp = fopen(vendor_path, "r");
+    if (!fp)
+      continue;
+    char vendor[16] = {0};
+    bool is_amd = false;
+    if (fgets(vendor, sizeof(vendor), fp)) {
+      // vendor file contains "0x1002\n"
+      if (strstr(vendor, "1002") != NULL) {
+        is_amd = true;
+      }
+    }
+    fclose(fp);
+    if (is_amd) {
+      closedir(dir);
+      return true;
+    }
   }
-  pclose(fp);
-  return found;
+  closedir(dir);
+  return false;
 }
 
 // Check if running in snap environment

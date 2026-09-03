@@ -46,8 +46,11 @@ void nvtop_line_plot(WINDOW *win, size_t num_data, const double *data, unsigned 
   for (size_t k = 0; k < num_lines; ++k)
     lvl_before[k] = data_level(rows, data[k], increment);
 
-  for (size_t i = 0; i < num_data || i < (size_t)cols; i += num_lines) {
+  size_t draw_cols = num_data < (size_t)cols ? num_data : (size_t)cols;
+  for (size_t i = 0; i + num_lines <= draw_cols; i += num_lines) {
     for (unsigned k = 0; k < num_lines; ++k) {
+      if (i + k >= num_data)
+        continue;
       unsigned lvl_now_k = data_level(rows, data[i + k], increment);
       wcolor_set(win, k + 1, NULL);
       // Three cases: has increased, has decreased and remained level
@@ -115,7 +118,7 @@ void nvtop_line_plot(WINDOW *win, size_t num_data, const double *data, unsigned 
       if (length <= (size_t)cols) {
         mvwprintw(win, plot_y_position, cols - length, "%s", legend[i]);
       } else {
-        mvwprintw(win, plot_y_position, 0, "%.*s", (int)(length - cols), legend[i]);
+        mvwprintw(win, plot_y_position, 0, "%.*s", cols, legend[i]);
       }
     }
     plot_y_position++;

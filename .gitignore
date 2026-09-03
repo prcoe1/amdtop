@@ -1,6 +1,11 @@
 *.o
 *ctags
 build/
+build-*/
 cmake-build*/
 .vscode
 .idea
+*.snap
+squashfs-root/
+snap_credentials.txt
+amdtop_*.snap
