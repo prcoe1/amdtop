@@ -900,6 +900,39 @@ static void gpuinfo_amdgpu_refresh_dynamic_info(struct gpu_info *_gpu_info) {
     SET_GPUINFO_DYNAMIC(dynamic_info, fan_speed, currentFanSpeed * 100 / gpu_info->maxFanValue);
   }
 
+  // Hwmon fallback for junction/mem temps (and edge if drm query missed)
+  // Allows JUNC/MEMT to populate without ROCm SMI. Reads millidegrees and converts to C.
+  if (gpu_info->hwmonDevice) {
+    unsigned temp_input = 0;
+    if (!GPUINFO_DYNAMIC_FIELD_VALID(dynamic_info, gpu_temp) &&
+        readAttributeFromDevice(gpu_info->hwmonDevice, "temp1_input", "%u", &temp_input) == 1 && temp_input > 0) {
+      SET_GPUINFO_DYNAMIC(dynamic_info, gpu_temp, temp_input / 1000);
+    }
+    if (!GPUINFO_DYNAMIC_FIELD_VALID(dynamic_info, gpu_temp_junction) &&
+        readAttributeFromDevice(gpu_info->hwmonDevice, "temp2_input", "%u", &temp_input) == 1 && temp_input > 0) {
+      // Validate label is junction when available, but accept temp2 as junction fallback
+      const char *label = NULL;
+      bool label_ok = true;
+      if (nvtop_device_get_sysattr_value(gpu_info->hwmonDevice, "temp2_label", &label) == 0 && label) {
+        label_ok = (strstr(label, "junction") != NULL || strstr(label, "Junction") != NULL || strstr(label, "edge") == NULL);
+        // If label is explicitly "mem", don't use temp2 for junction
+        if (strstr(label, "mem") != NULL) label_ok = false;
+      }
+      if (label_ok)
+        SET_GPUINFO_DYNAMIC(dynamic_info, gpu_temp_junction, temp_input / 1000);
+    }
+    if (!GPUINFO_DYNAMIC_FIELD_VALID(dynamic_info, gpu_temp_mem) &&
+        readAttributeFromDevice(gpu_info->hwmonDevice, "temp3_input", "%u", &temp_input) == 1 && temp_input > 0) {
+      const char *label = NULL;
+      bool label_ok = true;
+      if (nvtop_device_get_sysattr_value(gpu_info->hwmonDevice, "temp3_label", &label) == 0 && label) {
+        label_ok = (strstr(label, "mem") != NULL || strstr(label, "MEM") != NULL);
+      }
+      if (label_ok)
+        SET_GPUINFO_DYNAMIC(dynamic_info, gpu_temp_mem, temp_input / 1000);
+    }
+  }
+
   // Device power usage
   if (libdrm_amdgpu_handle && _amdgpu_query_sensor_info)
     last_libdrm_return_status =
