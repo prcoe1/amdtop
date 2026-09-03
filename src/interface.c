@@ -44,7 +44,7 @@
 
 static unsigned int sizeof_device_field[device_field_count] = {
     [device_name] = 11,       [device_fan_speed] = 11,   [device_temperature] = 10, [device_power] = 15,
-    [device_clock] = 11,      [device_mem_clock] = 12,   [device_pcie] = 46,        [device_shadercores] = 7,
+    [device_clock] = 11,      [device_mem_clock] = 12,   [device_pcie] = 65,        [device_shadercores] = 7,
     [device_l2features] = 11, [device_execengines] = 11,
 };
 
@@ -851,6 +851,24 @@ static void draw_devices(struct list_head *devices, struct nvtop_interface *inte
       wprintw(dev->pcie_info, "%uMHz", device->dynamic_info.mem_clock_speed);
     else
       wprintw(dev->pcie_info, "N/A MHz");
+
+    // PCIe bandwidth RX/TX (KB/s -> bytes for scale helper)
+    if (GPUINFO_DYNAMIC_FIELD_VALID(&device->dynamic_info, pcie_rx) ||
+        GPUINFO_DYNAMIC_FIELD_VALID(&device->dynamic_info, pcie_tx)) {
+      wprintw(dev->pcie_info, " ");
+      if (GPUINFO_DYNAMIC_FIELD_VALID(&device->dynamic_info, pcie_rx)) {
+        wprintw(dev->pcie_info, "RX ");
+        print_pcie_at_scale(dev->pcie_info, device->dynamic_info.pcie_rx * 1024);
+      } else {
+        wprintw(dev->pcie_info, "RX N/A");
+      }
+      wprintw(dev->pcie_info, " TX ");
+      if (GPUINFO_DYNAMIC_FIELD_VALID(&device->dynamic_info, pcie_tx)) {
+        print_pcie_at_scale(dev->pcie_info, device->dynamic_info.pcie_tx * 1024);
+      } else {
+        wprintw(dev->pcie_info, "N/A");
+      }
+    }
 
     wnoutrefresh(dev->pcie_info);
 
@@ -2129,6 +2147,12 @@ void print_snapshot(struct list_head *devices, bool use_fahrenheit_option) {
     const char *mem_total_field = "mem_total";
     const char *mem_used_field = "mem_used";
     const char *mem_free_field = "mem_free";
+    const char *pcie_gen_field = "pcie_gen";
+    const char *pcie_width_field = "pcie_width";
+    const char *pcie_rx_field = "pcie_rx";
+    const char *pcie_tx_field = "pcie_tx";
+    const char *temp_junc_field = "temp_junction";
+    const char *temp_mem_field = "temp_mem";
 
     printf("%s{\n", indent_level_two);
 
@@ -2204,9 +2228,43 @@ void print_snapshot(struct list_head *devices, bool use_fahrenheit_option) {
       printf("%s\"%s\": null,\n", indent_level_four, mem_used_field);
     // Memory Available
     if (GPUINFO_DYNAMIC_FIELD_VALID(&device->dynamic_info, free_memory))
-      printf("%s\"%s\": \"%llu\"\n", indent_level_four, mem_free_field, device->dynamic_info.free_memory);
+      printf("%s\"%s\": \"%llu\",\n", indent_level_four, mem_free_field, device->dynamic_info.free_memory);
     else
-      printf("%s\"%s\": null\n", indent_level_four, mem_free_field);
+      printf("%s\"%s\": null,\n", indent_level_four, mem_free_field);
+
+    // PCIe link (configured speed) and bandwidth
+    if (GPUINFO_DYNAMIC_FIELD_VALID(&device->dynamic_info, pcie_link_gen))
+      printf("%s\"%s\": \"%u\",\n", indent_level_four, pcie_gen_field, device->dynamic_info.pcie_link_gen);
+    else
+      printf("%s\"%s\": null,\n", indent_level_four, pcie_gen_field);
+    if (GPUINFO_DYNAMIC_FIELD_VALID(&device->dynamic_info, pcie_link_width))
+      printf("%s\"%s\": \"%u\",\n", indent_level_four, pcie_width_field, device->dynamic_info.pcie_link_width);
+    else
+      printf("%s\"%s\": null,\n", indent_level_four, pcie_width_field);
+    if (GPUINFO_DYNAMIC_FIELD_VALID(&device->dynamic_info, pcie_rx))
+      printf("%s\"%s\": \"%u KiB/s\",\n", indent_level_four, pcie_rx_field, device->dynamic_info.pcie_rx);
+    else
+      printf("%s\"%s\": null,\n", indent_level_four, pcie_rx_field);
+    if (GPUINFO_DYNAMIC_FIELD_VALID(&device->dynamic_info, pcie_tx))
+      printf("%s\"%s\": \"%u KiB/s\",\n", indent_level_four, pcie_tx_field, device->dynamic_info.pcie_tx);
+    else
+      printf("%s\"%s\": null,\n", indent_level_four, pcie_tx_field);
+
+    // Junction and memory temps (hwmon fallback or ROCm)
+    if (GPUINFO_DYNAMIC_FIELD_VALID(&device->dynamic_info, gpu_temp_junction)) {
+      unsigned int tj = device->dynamic_info.gpu_temp_junction;
+      if (use_fahrenheit_option) tj = (unsigned)(32 + nearbyint(tj * 1.8));
+      printf("%s\"%s\": \"%u%s\",\n", indent_level_four, temp_junc_field, tj, use_fahrenheit_option ? "F" : "C");
+    } else {
+      printf("%s\"%s\": null,\n", indent_level_four, temp_junc_field);
+    }
+    if (GPUINFO_DYNAMIC_FIELD_VALID(&device->dynamic_info, gpu_temp_mem)) {
+      unsigned int tm = device->dynamic_info.gpu_temp_mem;
+      if (use_fahrenheit_option) tm = (unsigned)(32 + nearbyint(tm * 1.8));
+      printf("%s\"%s\": \"%u%s\"\n", indent_level_four, temp_mem_field, tm, use_fahrenheit_option ? "F" : "C");
+    } else {
+      printf("%s\"%s\": null\n", indent_level_four, temp_mem_field);
+    }
 
     if (device->list.next == devices)
       printf("%s}\n", indent_level_two);
