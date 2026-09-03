@@ -36,6 +36,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 static volatile sig_atomic_t signal_exit = 0;
@@ -294,12 +295,40 @@ int main(int argc, char **argv) {
 
       bool all_success = true;
       for (size_t i = 0; i < sizeof(interfaces) / sizeof(interfaces[0]); i++) {
-        char cmd[256];
-        snprintf(cmd, sizeof(cmd), "snap connect amdtop:%s", interfaces[i]);
-        printf("  Running: %s\n", cmd);
-        int ret = system(cmd);
+        // Validate interface name is alphanumeric + hyphen/underscore only
+        const char *iface = interfaces[i];
+        bool valid = true;
+        for (const char *p = iface; *p; p++) {
+          if (!((*p >= 'a' && *p <= 'z') || (*p >= '0' && *p <= '9') || *p == '-' || *p == '_')) {
+            valid = false;
+            break;
+          }
+        }
+        if (!valid) {
+          fprintf(stderr, "  Error: Invalid interface name %s\n", iface);
+          all_success = false;
+          continue;
+        }
+        char iface_arg[64];
+        snprintf(iface_arg, sizeof(iface_arg), "amdtop:%s", iface);
+        printf("  Running: snap connect %s\n", iface_arg);
+        pid_t pid = fork();
+        int ret = -1;
+        if (pid == 0) {
+          // Child: exec snap directly without shell
+          execlp("snap", "snap", "connect", iface_arg, (char *)NULL);
+          _exit(127);
+        } else if (pid > 0) {
+          int status = 0;
+          if (waitpid(pid, &status, 0) == pid) {
+            if (WIFEXITED(status))
+              ret = WEXITSTATUS(status);
+            else
+              ret = -1;
+          }
+        }
         if (ret != 0) {
-          fprintf(stderr, "  Warning: Failed to connect %s (may already be connected)\n", interfaces[i]);
+          fprintf(stderr, "  Warning: Failed to connect %s (may already be connected, exit %d)\n", interfaces[i], ret);
           all_success = false;
         }
       }

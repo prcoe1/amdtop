@@ -9,3 +9,5 @@ cmake-build*/
 squashfs-root/
 snap_credentials.txt
 amdtop_*.snap
+*.deb
+/tmp/

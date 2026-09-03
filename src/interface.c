@@ -2189,19 +2189,19 @@ void print_snapshot(struct list_head *devices, bool use_fahrenheit_option) {
 
     // Memory Utilization
     if (GPUINFO_DYNAMIC_FIELD_VALID(&device->dynamic_info, mem_util_rate))
-      printf("%s\"%s\": \"%u%%\"\n", indent_level_four, mem_util_field, device->dynamic_info.mem_util_rate);
+      printf("%s\"%s\": \"%u%%\",\n", indent_level_four, mem_util_field, device->dynamic_info.mem_util_rate);
     else
-      printf("%s\"%s\": null\n", indent_level_four, mem_util_field);
+      printf("%s\"%s\": null,\n", indent_level_four, mem_util_field);
     // Memory Total
     if (GPUINFO_DYNAMIC_FIELD_VALID(&device->dynamic_info, total_memory))
-      printf("%s\"%s\": \"%llu\"\n", indent_level_four, mem_total_field, device->dynamic_info.total_memory);
+      printf("%s\"%s\": \"%llu\",\n", indent_level_four, mem_total_field, device->dynamic_info.total_memory);
     else
-      printf("%s\"%s\": null\n", indent_level_four, mem_total_field);
+      printf("%s\"%s\": null,\n", indent_level_four, mem_total_field);
     // Memory Used
     if (GPUINFO_DYNAMIC_FIELD_VALID(&device->dynamic_info, used_memory))
-      printf("%s\"%s\": \"%llu\"\n", indent_level_four, mem_used_field, device->dynamic_info.used_memory);
+      printf("%s\"%s\": \"%llu\",\n", indent_level_four, mem_used_field, device->dynamic_info.used_memory);
     else
-      printf("%s\"%s\": null\n", indent_level_four, mem_used_field);
+      printf("%s\"%s\": null,\n", indent_level_four, mem_used_field);
     // Memory Available
     if (GPUINFO_DYNAMIC_FIELD_VALID(&device->dynamic_info, free_memory))
       printf("%s\"%s\": \"%llu\"\n", indent_level_four, mem_free_field, device->dynamic_info.free_memory);
